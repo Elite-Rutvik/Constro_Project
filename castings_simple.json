@@ -1,0 +1,47 @@
+{
+    "casting_1": {
+      "shape_A": {
+        "side_1": 1720,
+        "side_2": 1020
+      },
+      "shape_B": {
+        "side_1": 900,
+        "side_2": 600
+      },
+      "shape_C": {
+        "side_1": 580,
+        "side_2": 300
+      }
+    },
+    "casting_2": {
+      "shape_D": {
+        "side_1": 1120,
+        "side_2": 820,
+        "side_3": 600
+      },
+      "shape_E": {
+        "side_1": 900,
+        "side_2": 470
+      },
+      "shape_F": {
+        "side_1": 300,
+        "side_2": 380
+      }
+    },
+    "casting_3": {
+      "shape_G": {
+        "side_1": 1120,
+        "side_2": 820,
+        "side_3": 600
+      },
+      "shape_H": {
+        "side_1": 900,
+        "side_2": 470
+      },
+      "shape_I": {
+        "side_1": 300,
+        "side_2": 380
+      }
+    }
+}
+  

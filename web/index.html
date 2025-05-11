@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Panel Optimization</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Panel Optimization System</h1>
+        </header>
+        
+        <main>
+            <div class="card">
+                <h2>Input Data</h2>
+                <div class="input-toggle">
+                    <label>
+                        <input type="radio" name="input-method" value="manual" checked>
+                        Manual Input
+                    </label>
+                    <label>
+                        <input type="radio" name="input-method" value="json">
+                        JSON File
+                    </label>
+                </div>
+
+                <div class="input-section" id="manual-input">
+                    <div class="form-group">
+                        <input type="text" id="casting-name" placeholder="Casting Name">
+                        <button class="btn primary" id="add-casting">Add Casting</button>
+                        <button class="btn secondary" id="clear-manual">Clear All</button>
+                    </div>
+                    
+                    <div class="form-group">
+                        <input type="text" id="shape-name" placeholder="Shape Name">
+                        <input type="text" id="side-lengths" placeholder="Side Lengths (comma-separated)">
+                        <button class="btn secondary" id="add-shape">Add Shape</button>
+                    </div>
+                </div>
+
+                <div class="input-section hidden" id="json-input">
+                    <div class="form-group">
+                        <input type="file" id="json-file" accept=".json">
+                        <button class="btn primary" id="upload-btn">Upload JSON</button>
+                        <button class="btn secondary" id="clear-file">Clear File</button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <select id="primary-casting">
+                        <option value="">Select Primary Casting</option>
+                    </select>
+                    <button class="btn primary" id="run-optimization">Run Optimization</button>
+                </div>
+
+                <div class="preview-container">
+                    <h3>Data Preview</h3>
+                    <pre id="data-preview"></pre>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Results</h2>
+                <div id="optimization-results"></div>
+                <button class="btn secondary" id="export-results">Export Results</button>
+            </div>
+        </main>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
