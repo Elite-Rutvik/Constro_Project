@@ -15,6 +15,7 @@ import fitz  # PyMuPDF
 import cv2
 import numpy as np
 from google import generativeai as genai
+from dotenv import load_dotenv
 
 # Import PaddleOCR if available, otherwise provide an error message
 try:
@@ -24,8 +25,14 @@ except ImportError:
     PADDLE_OCR_AVAILABLE = False
     print("Warning: PaddleOCR is not installed. PDF processing will not work.")
 
+# Load environment variables from .env file
+load_dotenv(os.path.join(os.path.dirname(parent_dir), '.env'))
+
 STANDARD_PANEL_SIZES = [100, 200, 300, 400, 500, 600]
-GEMINI_API_KEY = "AIzaSyAFCHmz7n8PVvM2fjd3KVd1FBv5kPCIyQk"  # Consider using environment variables for this
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+if not GEMINI_API_KEY:
+    print("Warning: GEMINI_API_KEY not found in environment variables")
 
 app = Flask(__name__)
 
