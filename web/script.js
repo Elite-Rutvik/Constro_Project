@@ -6,8 +6,11 @@ document.addEventListener('DOMContentLoaded', function() {
     const inputMethod = document.getElementsByName('input-method');
     const jsonInput = document.getElementById('json-input');
     const manualInput = document.getElementById('manual-input');
+    const pdfInput = document.getElementById('pdf-input');
     const jsonFile = document.getElementById('json-file');
+    const pdfFile = document.getElementById('pdf-file');
     const uploadBtn = document.getElementById('upload-btn');
+    const uploadPdfBtn = document.getElementById('upload-pdf-btn');
     const castingName = document.getElementById('casting-name');
     const shapeName = document.getElementById('shape-name');
     const sideLengths = document.getElementById('side-lengths');
@@ -25,8 +28,14 @@ document.addEventListener('DOMContentLoaded', function() {
             if (this.value === 'json') {
                 jsonInput.classList.remove('hidden');
                 manualInput.classList.add('hidden');
+                pdfInput.classList.add('hidden');
+            } else if (this.value === 'pdf') {
+                pdfInput.classList.remove('hidden');
+                jsonInput.classList.add('hidden');
+                manualInput.classList.add('hidden');
             } else {
                 jsonInput.classList.add('hidden');
+                pdfInput.classList.add('hidden');
                 manualInput.classList.remove('hidden');
             }
         });
@@ -54,6 +63,47 @@ document.addEventListener('DOMContentLoaded', function() {
         };
 
         reader.readAsText(file);
+    });
+
+    // PDF file upload
+    uploadPdfBtn.addEventListener('click', function() {
+        if (pdfFile.files.length === 0) {
+            alert('Please select a PDF file');
+            return;
+        }
+
+        const file = pdfFile.files[0];
+        const formData = new FormData();
+        formData.append('pdfFile', file);
+        
+        // Show loading indicator
+        dataPreview.innerHTML = '<div class="loading">Processing PDF... This may take a minute.</div>';
+        
+        // First, we need to send the PDF to a server endpoint that will extract data
+        fetch('/extract-pdf', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log("Received data:", data);
+            if (!data || Object.keys(data).length === 0) {
+                throw new Error('Empty data received from server');
+            }
+            castings = processJsonData(data);
+            updateDataPreview();
+            updatePrimaryCastingOptions();
+        })
+        .catch(error => {
+            console.error('PDF processing error:', error);
+            dataPreview.innerHTML = `<div class="error-message">Error: ${error.message}</div>`;
+            alert('Error processing PDF file. Please try again or use another input method.');
+        });
     });
 
     // Manual input handlers
@@ -154,29 +204,86 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Helper functions
     function processJsonData(data) {
-        return Object.entries(data).map(([name, shapes]) => ({
-            name,
-            shapes: Object.entries(shapes).map(([shapeName, sides]) => ({
-                name: shapeName,
-                sides: Object.values(sides)
-            }))
-        }));
+        console.log("Raw JSON data:", data);
+        try {
+            // Create a new array to hold our casting objects
+            const processedCastings = [];
+            
+            // Loop through each casting in the data
+            for (const [castingName, castingShapes] of Object.entries(data)) {
+                console.log(`Processing casting ${castingName} with shapes:`, castingShapes);
+                
+                // Create a new casting object with an array for shapes
+                const castingObj = {
+                    name: castingName,
+                    shapes: []
+                };
+                
+                // Loop through each shape in the casting
+                for (const [shapeName, shapeData] of Object.entries(castingShapes)) {
+                    console.log(`Processing shape ${shapeName} with data:`, shapeData);
+                    
+                    // Create a shape object with the name and sides array
+                    const shapeObj = {
+                        name: shapeName,  // This is where the name is assigned
+                        sides: []
+                    };
+                    
+                    // Extract side values from the shape data
+                    if (shapeData.side_1 !== undefined) {
+                        shapeObj.sides.push(shapeData.side_1);
+                    }
+                    if (shapeData.side_2 !== undefined) {
+                        shapeObj.sides.push(shapeData.side_2);
+                    }
+                    
+                    // Add the shape object to the casting's shapes array
+                    castingObj.shapes.push(shapeObj);
+                }
+                
+                // Add the casting object to our results array
+                processedCastings.push(castingObj);
+            }
+            
+            console.log("Processed castings:", processedCastings);
+            return processedCastings;
+        } catch (error) {
+            console.error("Error processing JSON data:", error);
+            throw error;
+        }
     }
 
     function updateDataPreview() {
-        const formattedPreview = castings.map(casting => {
-            const shapesData = casting.shapes.map(shape => {
-                const sidesData = shape.sides.map((length, idx) => 
-                    `    Side ${idx + 1}: ${length}`
-                ).join('\n');
-                
-                return `  Shape : ${shape.name.split('_')[1]}\n${sidesData}`;
-            }).join('\n\n');
+        try {
+            console.log("Updating data preview with castings:", castings);
             
-            return `Casting ${casting.name.split('_')[1]}\n${shapesData}`;
-        }).join('\n\n');
+            if (!castings || castings.length === 0) {
+                dataPreview.innerHTML = '<pre class="preview-text">No casting data available.</pre>';
+                return;
+            }
+            
+            const formattedPreview = castings.map(casting => {
+                const shapesData = casting.shapes.map(shape => {
+                    // Display the actual shape name (like SW6) directly
+                    const shapeName = shape.name;
+                    
+                    const sidesData = shape.sides.map((length, idx) => 
+                        `    Side ${idx + 1}: ${length}`
+                    ).join('\n');
+                    
+                    return `  Shape: ${shapeName}\n${sidesData}`;
+                }).join('\n\n');
+                
+                const castingNumber = casting.name.replace('casting_', '');
+                
+                return `Casting ${castingNumber}\n${shapesData}`;
+            }).join('\n\n');
 
-        dataPreview.innerHTML = `<pre class="preview-text">${formattedPreview}</pre>`;
+            dataPreview.innerHTML = `<pre class="preview-text">${formattedPreview}</pre>`;
+        } catch (error) {
+            console.error("Error updating data preview:", error);
+            dataPreview.innerHTML = `<pre class="preview-text error-message">Error displaying data: ${error.message}</pre>`;
+        }
     }
 
     function updatePrimaryCastingOptions() {
@@ -194,6 +301,7 @@ document.addEventListener('DOMContentLoaded', function() {
         container.innerHTML = '';
 
         try {
+            console.log("Displaying results:", response);
             const resultsHtml = `
             <div class="results-content">
                 <div class="progress-section">
@@ -205,13 +313,18 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
 
                 <div class="castings-section">
-                    ${response.results.castings.map(casting => `
+                    ${response.results.castings.map(casting => {
+                        const castingNumber = casting.name.includes('_') ? 
+                            casting.name.split('_')[1] : 
+                            casting.name.replace(/\D/g, '');
+                        
+                        return `
                         <div class="casting-block ${casting.type.toLowerCase()}">
-                            <div class="casting-header">Casting ${casting.name.split('_')[1]}</div>
+                            <div class="casting-header">Casting ${castingNumber}</div>
                             <div class="casting-type">${casting.type}</div>
                             ${casting.shapes.map(shape => `
                                 <div class="shape-block">
-                                    Shape : ${shape.name.split('_')[1]}
+                                    Shape: ${shape.name}
                                     ${shape.sides.map(side => 
                                         `<div class="side-block">
                                             Side ${side.number} (Length: ${side.length}): [${side.panels.join(', ')}]
@@ -220,7 +333,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 </div>
                             `).join('\n')}
                         </div>`
-                    ).join('\n')}
+                    }).join('\n')}
                 </div>
 
                 <div class="summary-section">
@@ -295,6 +408,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Add these new functions after the existing event listeners
     const clearManualBtn = document.getElementById('clear-manual');
     const clearFileBtn = document.getElementById('clear-file');
+    const clearPdfBtn = document.getElementById('clear-pdf');
 
     // Clear manual input
     clearManualBtn.addEventListener('click', function() {
@@ -310,6 +424,14 @@ document.addEventListener('DOMContentLoaded', function() {
     clearFileBtn.addEventListener('click', function() {
         castings = [];
         jsonFile.value = '';
+        updateDataPreview();
+        updatePrimaryCastingOptions();
+    });
+
+    // Clear PDF input
+    clearPdfBtn.addEventListener('click', function() {
+        castings = [];
+        pdfFile.value = '';
         updateDataPreview();
         updatePrimaryCastingOptions();
     });

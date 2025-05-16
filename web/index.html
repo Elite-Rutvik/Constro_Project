@@ -22,6 +22,10 @@
                         <input type="radio" name="input-method" value="json">
                         JSON File
                     </label>
+                    <label>
+                        <input type="radio" name="input-method" value="pdf">
+                        PDF File
+                    </label>
                 </div>
 
                 <div class="input-section" id="manual-input">
@@ -43,6 +47,14 @@
                         <input type="file" id="json-file" accept=".json">
                         <button class="btn primary" id="upload-btn">Upload JSON</button>
                         <button class="btn secondary" id="clear-file">Clear File</button>
+                    </div>
+                </div>
+
+                <div class="input-section hidden" id="pdf-input">
+                    <div class="form-group">
+                        <input type="file" id="pdf-file" accept=".pdf">
+                        <button class="btn primary" id="upload-pdf-btn">Upload PDF</button>
+                        <button class="btn secondary" id="clear-pdf">Clear File</button>
                     </div>
                 </div>
 
