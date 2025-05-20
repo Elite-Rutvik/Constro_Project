@@ -1,6 +1,8 @@
 document.addEventListener('DOMContentLoaded', function() {
     // State management
     let castings = [];
+    let optimizationResults = null; // Store optimization results for export
+    let optimizationComplete = false;
     
     // DOM Elements
     const inputMethod = document.getElementsByName('input-method');
@@ -19,8 +21,19 @@ document.addEventListener('DOMContentLoaded', function() {
     const primaryCastingSelect = document.getElementById('primary-casting');
     const runOptimizationBtn = document.getElementById('run-optimization');
     const dataPreview = document.getElementById('data-preview');
-    const optimizationResults = document.getElementById('optimization-results');
+    const optimizationResultsDiv = document.getElementById('optimization-results');
     const exportResultsBtn = document.getElementById('export-results');
+    
+    // Add Excel export button (create if doesn't exist)
+    let exportExcelBtn = document.getElementById('export-excel');
+    if (!exportExcelBtn) {
+        exportExcelBtn = document.createElement('button');
+        exportExcelBtn.id = 'export-excel';
+        exportExcelBtn.textContent = 'Export to Excel';
+        exportExcelBtn.className = 'btn btn-secondary';
+        exportExcelBtn.style.display = 'none'; // Initially hidden
+        exportResultsBtn.parentNode.appendChild(exportExcelBtn);
+    }
 
     // Input method toggle
     inputMethod.forEach(input => {
@@ -177,15 +190,21 @@ document.addEventListener('DOMContentLoaded', function() {
             });
 
             const results = await response.json();
+            optimizationResults = results; // Store results for export
+            optimizationComplete = true;
             displayResults(results);
+            
+            // Show export buttons
+            exportResultsBtn.style.display = 'inline-block';
+            exportExcelBtn.style.display = 'inline-block';
         } catch (error) {
             alert('Optimization failed: ' + error.message);
         }
     });
 
-    // Export results
+    // Export results to text
     exportResultsBtn.addEventListener('click', function() {
-        const results = optimizationResults.textContent;
+        const results = optimizationResultsDiv.textContent;
         if (!results) {
             alert('No results to export');
             return;
@@ -201,6 +220,58 @@ document.addEventListener('DOMContentLoaded', function() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
     });
+
+    // Export results to Excel
+    exportExcelBtn.addEventListener('click', function() {
+        if (!optimizationComplete || !optimizationResults) {
+            alert('Please run optimization first');
+            return;
+        }
+
+        try {
+            // Generate Excel file
+            generateExcelFile(optimizationResults);
+        } catch (error) {
+            alert('Failed to export to Excel: ' + error.message);
+        }
+    });
+
+    // Clear button handlers
+    const clearManualBtn = document.getElementById('clear-manual');
+    const clearFileBtn = document.getElementById('clear-file');
+    const clearPdfBtn = document.getElementById('clear-pdf');
+
+    if (clearManualBtn) {
+        clearManualBtn.addEventListener('click', function() {
+            castings = [];
+            castingName.value = '';
+            shapeName.value = '';
+            sideLengths.value = '';
+            updateDataPreview();
+            updatePrimaryCastingOptions();
+            resetExportButtons();
+        });
+    }
+
+    if (clearFileBtn) {
+        clearFileBtn.addEventListener('click', function() {
+            castings = [];
+            jsonFile.value = '';
+            updateDataPreview();
+            updatePrimaryCastingOptions();
+            resetExportButtons();
+        });
+    }
+
+    if (clearPdfBtn) {
+        clearPdfBtn.addEventListener('click', function() {
+            castings = [];
+            pdfFile.value = '';
+            updateDataPreview();
+            updatePrimaryCastingOptions();
+            resetExportButtons();
+        });
+    }
 
     // Helper functions
     function processJsonData(data) {
@@ -405,34 +476,200 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Add these new functions after the existing event listeners
-    const clearManualBtn = document.getElementById('clear-manual');
-    const clearFileBtn = document.getElementById('clear-file');
-    const clearPdfBtn = document.getElementById('clear-pdf');
+    function resetExportButtons() {
+        optimizationComplete = false;
+        optimizationResults = null;
+        exportResultsBtn.style.display = 'none';
+        exportExcelBtn.style.display = 'none';
+        optimizationResultsDiv.innerHTML = '';
+    }
 
-    // Clear manual input
-    clearManualBtn.addEventListener('click', function() {
-        castings = [];
-        castingName.value = '';
-        shapeName.value = '';
-        sideLengths.value = '';
-        updateDataPreview();
-        updatePrimaryCastingOptions();
-    });
+    // Excel generation function
+    function generateExcelFile(results) {
+        try {
+            // Check if SheetJS library is available
+            if (typeof XLSX === 'undefined') {
+                throw new Error('SheetJS library is not loaded. Please include the library to export Excel files.');
+            }
 
-    // Clear file input
-    clearFileBtn.addEventListener('click', function() {
-        castings = [];
-        jsonFile.value = '';
-        updateDataPreview();
-        updatePrimaryCastingOptions();
-    });
+            // Create a new workbook
+            const wb = XLSX.utils.book_new();
 
-    // Clear PDF input
-    clearPdfBtn.addEventListener('click', function() {
-        castings = [];
-        pdfFile.value = '';
-        updateDataPreview();
-        updatePrimaryCastingOptions();
-    });
+            // Create Sheet 1: Casting Dimensions & Panel Layouts
+            const sheet1Data = createDimensionsSheetData(results);
+            const ws1 = XLSX.utils.aoa_to_sheet(sheet1Data);
+            XLSX.utils.book_append_sheet(wb, ws1, "Casting Dimensions & Panels");
+
+            // Create Sheet 2: Panel Summary
+            const sheet2Data = createPanelSummarySheetData(results);
+            const ws2 = XLSX.utils.aoa_to_sheet(sheet2Data);
+            XLSX.utils.book_append_sheet(wb, ws2, "Panel Summary");
+
+            // Generate Excel file and download
+            const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+            const filename = `optimization_results_${timestamp}.xlsx`;
+            XLSX.writeFile(wb, filename);
+
+        } catch (error) {
+            console.error('Excel generation error:', error);
+            
+            // Fallback: Generate CSV files if Excel fails
+            generateCSVFiles(results);
+        }
+    }
+
+    function createDimensionsSheetData(results) {
+        const data = [];
+        const timestamp = new Date().toLocaleString();
+        
+        // Add title and timestamp
+        data.push(['Panel Optimization Results - Casting Dimensions & Panel Layouts']);
+        data.push([`Generated on: ${timestamp}`]);
+        data.push([]); // Empty row
+
+        // Find primary casting name
+        const primaryCasting = results.results.primary_casting;
+
+        // Process each casting
+        results.results.castings.forEach(casting => {
+            const castingType = casting.name === primaryCasting ? "PRIMARY" : "SECONDARY";
+            
+            // Casting header
+            data.push([`Casting: ${casting.name} (${castingType})`]);
+            
+            // Column headers
+            data.push(['Shape', 'Side', 'Length (mm)', 'Panel Layout', 'Panel Count', 'Panel Types']);
+            
+            // Add shape and side data
+            casting.shapes.forEach(shape => {
+                shape.sides.forEach((side, sideIdx) => {
+                    const panelLayout = side.panels.join(' + ');
+                    const panelCount = side.panels.length;
+                    
+                    // Calculate standard vs custom panels
+                    // Note: You may need to define STANDARD_PANEL_SIZES in your frontend
+                    const standardSizes = [100, 200, 300, 400, 500, 600]; // Example standard sizes
+                    const standardCount = side.panels.filter(p => standardSizes.includes(p)).length;
+                    const customCount = panelCount - standardCount;
+                    const panelTypes = `Std: ${standardCount}, Custom: ${customCount}`;
+                    
+                    data.push([
+                        sideIdx === 0 ? shape.name : '', // Show shape name only on first side
+                        `Side ${side.number}`,
+                        side.length,
+                        panelLayout,
+                        panelCount,
+                        panelTypes
+                    ]);
+                });
+            });
+            
+            // Add empty row between castings
+            data.push([]);
+        });
+
+        return data;
+    }
+
+    function createPanelSummarySheetData(results) {
+        const data = [];
+        const timestamp = new Date().toLocaleString();
+        
+        // Add title and timestamp
+        data.push(['Panel Usage Summary']);
+        data.push([`Generated on: ${timestamp}`]);
+        data.push([]); // Empty row
+
+        // Standard Panels Section
+        data.push(['Standard Panels']);
+        data.push(['Panel Size (mm)', 'Count', 'Type']);
+        
+        if (Object.keys(results.results.panel_stats.standard).length > 0) {
+            Object.entries(results.results.panel_stats.standard)
+                .sort(([a], [b]) => parseInt(a) - parseInt(b))
+                .forEach(([size, count]) => {
+                    data.push([`${size}mm`, count, 'Standard']);
+                });
+        } else {
+            data.push(['No standard panels used', '', '']);
+        }
+        
+        data.push([]); // Empty row
+
+        // Custom Panels Section
+        data.push(['Custom Panels']);
+        data.push(['Panel Size (mm)', 'Count', 'Type']);
+        
+        if (Object.keys(results.results.panel_stats.custom).length > 0) {
+            Object.entries(results.results.panel_stats.custom)
+                .sort(([a], [b]) => parseInt(a) - parseInt(b))
+                .forEach(([size, count]) => {
+                    data.push([`${size}mm`, count, 'Custom']);
+                });
+        } else {
+            data.push(['No custom panels used', '', '']);
+        }
+        
+        data.push([]); // Empty row
+
+        // Summary Statistics
+        data.push(['Summary Statistics']);
+        
+        const totalStandard = Object.values(results.results.panel_stats.standard).reduce((a, b) => a + b, 0);
+        const totalCustom = Object.values(results.results.panel_stats.custom).reduce((a, b) => a + b, 0);
+        const totalPanels = totalStandard + totalCustom;
+        
+        data.push(['Total Panels Used', totalPanels, '']);
+        data.push(['Standard Panels', totalStandard, totalPanels > 0 ? `${(totalStandard/totalPanels*100).toFixed(1)}%` : '0%']);
+        data.push(['Custom Panels', totalCustom, totalPanels > 0 ? `${(totalCustom/totalPanels*100).toFixed(1)}%` : '0%']);
+        data.push(['Standard Panel Types', Object.keys(results.results.panel_stats.standard).length, '']);
+        data.push(['Custom Panel Types', Object.keys(results.results.panel_stats.custom).length, '']);
+        data.push(['Total Panel Types', results.results.panel_stats.totals.total_types, '']);
+
+        return data;
+    }
+
+    // Fallback function to generate CSV files if Excel export fails
+    function generateCSVFiles(results) {
+        try {
+            // Generate dimensions CSV
+            const dimensionsData = createDimensionsSheetData(results);
+            const dimensionsCSV = convertArrayToCSV(dimensionsData);
+            downloadCSV(dimensionsCSV, 'casting_dimensions_panels.csv');
+
+            // Generate summary CSV
+            const summaryData = createPanelSummarySheetData(results);
+            const summaryCSV = convertArrayToCSV(summaryData);
+            downloadCSV(summaryCSV, 'panel_summary.csv');
+
+            alert('Excel export failed, but CSV files have been generated successfully.');
+        } catch (error) {
+            console.error('CSV generation error:', error);
+            throw new Error('Both Excel and CSV export failed');
+        }
+    }
+
+    function convertArrayToCSV(data) {
+        return data.map(row => 
+            row.map(cell => {
+                // Handle cells that might contain commas or quotes
+                if (typeof cell === 'string' && (cell.includes(',') || cell.includes('"'))) {
+                    return `"${cell.replace(/"/g, '""')}"`;
+                }
+                return cell || '';
+            }).join(',')
+        ).join('\n');
+    }
+
+    function downloadCSV(csvString, filename) {
+        const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', filename);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
 });

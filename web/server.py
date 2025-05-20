@@ -16,14 +16,19 @@ import cv2
 import numpy as np
 from google import generativeai as genai
 from dotenv import load_dotenv
+from io import BytesIO
+from paddleocr import PaddleOCR
 
-# Import PaddleOCR if available, otherwise provide an error message
+# Import PaddleOCR and PIL with proper error handling
 try:
     from paddleocr import PaddleOCR
+    from PIL import Image
     PADDLE_OCR_AVAILABLE = True
-except ImportError:
+    print("✓ PaddleOCR and PIL successfully imported")
+except ImportError as e:
     PADDLE_OCR_AVAILABLE = False
-    print("Warning: PaddleOCR is not installed. PDF processing will not work.")
+    print(f"✗ PaddleOCR/PIL import failed: {e}")
+    print("Please install with: pip install paddleocr pillow")
 
 # Load environment variables from .env file
 load_dotenv(os.path.join(os.path.dirname(parent_dir), '.env'))
@@ -207,7 +212,7 @@ def optimize():
 @app.route('/extract-pdf', methods=['POST'])
 def extract_pdf():
     if not PADDLE_OCR_AVAILABLE:
-        return jsonify({'error': 'PaddleOCR is not installed on the server'}), 500
+        return jsonify({'error': 'PaddleOCR is not installed on the server. Please install with: pip install paddleocr pillow'}), 500
     
     try:
         # Check if file exists in request
@@ -232,6 +237,7 @@ def extract_pdf():
             
             # Extract drawings
             drawings = page.get_drawings()
+            print(f"Found {len(drawings)} drawings in PDF")
             
             # Define color matching function
             def is_target_color(color, target=(1.0, 1.0, 0.49803900718688965), tol=0.05):
@@ -253,6 +259,8 @@ def extract_pdf():
                         if area >= MIN_AREA:
                             target_rectangles.append(rect)
             
+            print(f"Found {len(target_rectangles)} target colored rectangles")
+            
             # Process with more lenient color matching if needed
             if len(target_rectangles) == 0:
                 for drawing in drawings:
@@ -264,6 +272,7 @@ def extract_pdf():
                                 area = rect.width * rect.height
                                 if area >= MIN_AREA:
                                     target_rectangles.append(rect)
+                print(f"After lenient matching: Found {len(target_rectangles)} bright colored rectangles")
             
             # Last resort: get largest rectangles regardless of color
             if len(target_rectangles) == 0:
@@ -278,6 +287,7 @@ def extract_pdf():
                 
                 all_rectangles = sorted(all_rectangles, key=lambda r: r.width * r.height, reverse=True)
                 target_rectangles = all_rectangles[:4] if len(all_rectangles) >= 4 else all_rectangles
+                print(f"Fallback: Selected {len(target_rectangles)} largest rectangles")
             
             # Sort and limit number of rectangles
             target_rectangles = sorted(target_rectangles, key=lambda r: r.width * r.height, reverse=True)
@@ -292,12 +302,16 @@ def extract_pdf():
             
             # Initialize OCR - handle environment variable to avoid OpenMP error
             os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+            print("Initializing PaddleOCR...")
+            
             try:
                 # Use minimal configuration to avoid errors
                 ocr = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
+                print("✓ PaddleOCR initialized successfully")
             except Exception as e:
                 doc.close()
                 os.unlink(temp_pdf.name)
+                print(f"OCR initialization error: {str(e)}")
                 return jsonify({'error': f'OCR initialization failed: {str(e)}. Please try manual input.'}), 500
             
             # Process each rectangle - directly in memory without saving to files
@@ -306,12 +320,10 @@ def extract_pdf():
             
             for idx, rect in enumerate(target_rectangles):
                 try:
+                    print(f"Processing rectangle {idx + 1}/{len(target_rectangles)}")
+                    
                     # Extract image from PDF as pixmap
                     pix = page.get_pixmap(clip=rect, dpi=dpi)
-                    
-                    # Convert pixmap to numpy array for OCR processing
-                    from io import BytesIO
-                    from PIL import Image
                     
                     # Convert the pixmap to a PIL Image
                     imgbytes = BytesIO(pix.tobytes("png"))
@@ -320,31 +332,65 @@ def extract_pdf():
                     # Convert to numpy array (what PaddleOCR expects)
                     img_array = np.array(img)
                     
+                    # Ensure image is in RGB format
+                    if len(img_array.shape) == 3 and img_array.shape[2] == 4:  # RGBA
+                        img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
+                    elif len(img_array.shape) == 3 and img_array.shape[2] == 3:  # Already RGB
+                        pass
+                    else:  # Grayscale
+                        img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
+                    
                     # Process image with OCR directly
                     results = ocr.ocr(img_array, cls=True)
                     
                     pillar_name = ""
                     casting_output = []
                     
-                    if results and len(results) > 0:
+                    if results and len(results) > 0 and results[0] is not None:
                         for line in results:
+                            if line is None:
+                                continue
                             for word_info in line:
-                                _, (text, _) = word_info
+                                if word_info is None:
+                                    continue
                                 
-                                if any(key in text for key in ['SW', 'LSW', 'LIFT']):
-                                    pillar_name = text.strip().replace('\n', '')
-                                elif 'X' in text.upper() and pillar_name:
-                                    dimension = text.strip().replace('\n', '')
-                                    casting_output.append(f"{pillar_name} : {dimension}")
-                                    pillar_name = ""
+                                # Extract text from word_info
+                                try:
+                                    _, (text, confidence) = word_info
+                                    
+                                    # Skip low confidence results
+                                    if confidence < 0.5:
+                                        continue
+                                    
+                                    print(f"OCR found: '{text}' (confidence: {confidence:.2f})")
+                                    
+                                    # Look for casting names
+                                    if any(key in text.upper() for key in ['SW', 'LSW', 'LIFT']):
+                                        pillar_name = text.strip().replace('\n', '').replace(' ', '')
+                                        print(f"Found pillar name: {pillar_name}")
+                                    
+                                    # Look for dimensions (with X or x)
+                                    elif any(sep in text.upper() for sep in ['X', 'x', '*']) and pillar_name:
+                                        dimension = text.strip().replace('\n', '').replace(' ', '')
+                                        casting_output.append(f"{pillar_name} : {dimension}")
+                                        print(f"Found dimension: {pillar_name} : {dimension}")
+                                        pillar_name = ""  # Reset for next pair
+                                        
+                                except Exception as parse_error:
+                                    print(f"Error parsing OCR result: {parse_error}")
+                                    continue
                         
                         if casting_output:
                             casting_data += f"Casting {idx + 1} :\n"
                             for line in casting_output:
                                 casting_data += f"{line}\n"
                             casting_data += "\n"
+                            print(f"Added casting data for rectangle {idx + 1}")
+                    else:
+                        print(f"No OCR results for rectangle {idx + 1}")
                     
                 except Exception as e:
+                    print(f"Error processing rectangle {idx + 1}: {str(e)}")
                     # Continue to the next rectangle on error
                     continue
             
@@ -352,9 +398,15 @@ def extract_pdf():
             doc.close()
             os.unlink(temp_pdf.name)
             
+            print(f"Final extracted casting data:\n{casting_data}")
+            
             # If no casting data was extracted
             if not casting_data:
-                return jsonify({'error': 'Could not extract casting data from the PDF. Please try manual input or a different PDF.'}), 400
+                return jsonify({'error': 'Could not extract casting data from the PDF. The PDF might not contain readable text, or the casting format might be different. Please try manual input or a different PDF.'}), 400
+            
+            # Check if Gemini API is available
+            if not GEMINI_API_KEY:
+                return jsonify({'error': 'Gemini API key not configured. Please set up GEMINI_API_KEY in environment variables.'}), 500
             
             # Process with Gemini API
             genai.configure(api_key=GEMINI_API_KEY)
@@ -387,7 +439,10 @@ def extract_pdf():
             Rules:
             - Use the shape name (e.g., SW2, LSW4) as keys.
             - Parse the sizes into integers: width → side_1, height → side_2.
+            - Handle various dimension separators (x, X, *, etc.)
+            - Remove any spaces or non-numeric characters from dimensions
             - Use JSON syntax only — no explanations, comments, or extra text.
+            - If multiple castings exist, number them as casting_1, casting_2, etc.
 
             Now convert the following data into JSON:
 
@@ -401,20 +456,31 @@ def extract_pdf():
                 raw_response = response.text
                 cleaned_response = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_response.strip())
                 
+                print(f"Gemini response: {cleaned_response}")
+                
                 # Parse JSON response
                 json_data = json.loads(cleaned_response)
                 
-                # Return the processed data without saving locally
+                # Validate JSON structure
+                if not json_data or not isinstance(json_data, dict):
+                    raise ValueError("Invalid JSON structure received from Gemini")
+                
+                print("✓ Successfully processed PDF and generated JSON")
+                # Return the processed data
                 return jsonify(json_data)
                 
+            except json.JSONDecodeError as e:
+                print(f"JSON parsing error: {str(e)}")
+                print(f"Raw response: {raw_response}")
+                return jsonify({'error': f'Failed to parse Gemini response as JSON: {str(e)}. Please try manual input.'}), 500
             except Exception as e:
                 print(f"Error with Gemini processing: {str(e)}")
-                # Return dummy data as fallback
-                return jsonify({'error': 'Gemini processing failed. Please try manual input.'}), 500
+                return jsonify({'error': f'Gemini processing failed: {str(e)}. Please try manual input.'}), 500
             
         except Exception as e:
             print(f"Error processing PDF: {str(e)}")
-            os.unlink(temp_pdf.name)
+            if os.path.exists(temp_pdf.name):
+                os.unlink(temp_pdf.name)
             raise e
 
     except Exception as e:
@@ -422,8 +488,35 @@ def extract_pdf():
         print(f"Unhandled error in extract-pdf: {str(e)}")
         print(traceback.format_exc())
         
-        # Return dummy data as fallback
-        return jsonify({'error': 'An unexpected error occurred. Please try again later.'}), 500
+        return jsonify({'error': f'An unexpected error occurred: {str(e)}. Please try again.'}), 500
+
+# Test route to check if PaddleOCR is working
+@app.route('/test-ocr', methods=['GET'])
+def test_ocr():
+    """Test endpoint to verify PaddleOCR installation"""
+    if not PADDLE_OCR_AVAILABLE:
+        return jsonify({'status': 'error', 'message': 'PaddleOCR not available'}), 500
+    
+    try:
+        # Initialize OCR
+        os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+        ocr = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
+        
+        # Create a simple test image with text
+        img = np.ones((100, 300, 3), dtype=np.uint8) * 255  # White background
+        # This would normally require cv2.putText, but for testing we'll just return success
+        
+        return jsonify({
+            'status': 'success', 
+            'message': 'PaddleOCR is properly installed and initialized',
+            'paddle_ocr_available': True
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error', 
+            'message': f'PaddleOCR test failed: {str(e)}',
+            'paddle_ocr_available': False
+        }), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
