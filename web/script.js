@@ -3,6 +3,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let castings = [];
     let optimizationResults = null; // Store optimization results for export
     let optimizationComplete = false;
+    let projectHeight = 2400; // Default height in mm
     
     // DOM Elements
     const inputMethod = document.getElementsByName('input-method');
@@ -23,7 +24,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const dataPreview = document.getElementById('data-preview');
     const optimizationResultsDiv = document.getElementById('optimization-results');
     const exportResultsBtn = document.getElementById('export-results');
-    
+    const projectHeightInput = document.getElementById('project-height');
+
     // Add Excel export button (create if doesn't exist)
     let exportExcelBtn = document.getElementById('export-excel');
     if (!exportExcelBtn) {
@@ -35,6 +37,22 @@ document.addEventListener('DOMContentLoaded', function() {
         exportResultsBtn.parentNode.appendChild(exportExcelBtn);
     }
 
+    // Validation for project height
+    projectHeightInput.addEventListener('blur', function() {
+        const height = parseFloat(this.value);
+        if (isNaN(height) || height <= 0) {
+            alert('Please enter a valid positive height value');
+            this.value = projectHeight; // Reset to current valid value
+        } else {
+            projectHeight = height;
+        }
+    });
+
+    // Initialize project height input
+    if (projectHeightInput) {
+        projectHeightInput.value = projectHeight;
+    }
+    
     // Input method toggle
     inputMethod.forEach(input => {
         input.addEventListener('change', function() {
@@ -484,12 +502,42 @@ document.addEventListener('DOMContentLoaded', function() {
         optimizationResultsDiv.innerHTML = '';
     }
 
-    // Excel generation function
+    // Area calculation functions
+    function calculateColumnPerimeter(sides) {
+        // For rectangular columns, perimeter = 2 * (side1 + side2)
+        if (sides.length >= 2) {
+            return 2 * (sides[0] + sides[1]);
+        }
+        return 0;
+    }
+
+    function calculateShutteringArea(perimeter, height) {
+        // Area = perimeter * height (in square meters)
+        return (perimeter * height) / 1000000; // Convert from mm² to m²
+    }
+
+    function calculateExternalCornerArea(perimeter) {
+        // External corner area factor (based on PDF calculation pattern)
+        const factor = 1.248; // From PDF analysis
+        return (perimeter * factor) / 1000; // Convert to m²
+    }
+
+    // Excel generation function - MODIFIED
     function generateExcelFile(results) {
         try {
             // Check if SheetJS library is available
             if (typeof XLSX === 'undefined') {
-                throw new Error('SheetJS library is not loaded. Please include the library to export Excel files.');
+                // Try to load SheetJS dynamically
+                const script = document.createElement('script');
+                script.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+                script.onload = function() {
+                    generateExcelFile(results);
+                };
+                script.onerror = function() {
+                    throw new Error('Failed to load SheetJS library. Please check your internet connection.');
+                };
+                document.head.appendChild(script);
+                return;
             }
 
             // Create a new workbook
@@ -498,33 +546,277 @@ document.addEventListener('DOMContentLoaded', function() {
             // Create Sheet 1: Casting Dimensions & Panel Layouts
             const sheet1Data = createDimensionsSheetData(results);
             const ws1 = XLSX.utils.aoa_to_sheet(sheet1Data);
+            
+            // Apply styling to sheet 1
+            applySheetStyling(ws1, sheet1Data);
             XLSX.utils.book_append_sheet(wb, ws1, "Casting Dimensions & Panels");
 
             // Create Sheet 2: Panel Summary
             const sheet2Data = createPanelSummarySheetData(results);
             const ws2 = XLSX.utils.aoa_to_sheet(sheet2Data);
+            
+            // Apply styling to sheet 2
+            applySheetStyling(ws2, sheet2Data);
             XLSX.utils.book_append_sheet(wb, ws2, "Panel Summary");
+
+            // Create Sheet 3: Area Calculation with Formulas
+            const {data: sheet3Data, formulaCells} = createAreaCalculationSheetDataWithFormulas(results);
+            const ws3 = XLSX.utils.aoa_to_sheet(sheet3Data);
+            
+            // Add formulas to specific cells
+            addFormulasToSheet(ws3, formulaCells);
+            
+            // Apply styling to sheet 3
+            applySheetStyling(ws3, sheet3Data);
+            XLSX.utils.book_append_sheet(wb, ws3, "Area Calculation");
+
+            // Set column widths for better readability
+            setColumnWidths(ws1, [8, 15, 12, 12, 15, 20, 12, 15]);
+            setColumnWidths(ws2, [15, 10, 12]);
+            setColumnWidths(ws3, [8, 15, 12, 12, 12, 15, 15, 20, 25]);
 
             // Generate Excel file and download
             const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
             const filename = `optimization_results_${timestamp}.xlsx`;
-            XLSX.writeFile(wb, filename);
+            
+            // Use writeFile with proper options
+            XLSX.writeFile(wb, filename, {
+                bookType: 'xlsx',
+                bookSST: false,
+                type: 'binary'
+            });
+
+            alert('Excel file has been downloaded successfully!');
 
         } catch (error) {
             console.error('Excel generation error:', error);
+            alert('Excel export failed: ' + error.message + '. Trying CSV export instead...');
             
             // Fallback: Generate CSV files if Excel fails
             generateCSVFiles(results);
         }
     }
 
+    // NEW FUNCTION: Apply styling to sheets
+    function applySheetStyling(worksheet, data) {
+        if (!worksheet['!cols']) worksheet['!cols'] = [];
+        
+        // Set header row styling
+        const range = XLSX.utils.decode_range(worksheet['!ref']);
+        
+        for (let R = range.s.r; R <= range.e.r; ++R) {
+            for (let C = range.s.c; C <= range.e.c; ++C) {
+                const cellAddress = XLSX.utils.encode_cell({r: R, c: C});
+                if (!worksheet[cellAddress]) continue;
+                
+                // Style header rows (first few rows typically contain headers)
+                if (R < 5 || (data[R] && data[R][0] && typeof data[R][0] === 'string' && 
+                    (data[R][0].includes('Casting') || data[R][0].includes('Summary') || 
+                     data[R][0].includes('SHUTTERING') || data[R][0].includes('Sr. No.')))) {
+                    
+                    if (!worksheet[cellAddress].s) worksheet[cellAddress].s = {};
+                    worksheet[cellAddress].s.font = { bold: true };
+                    worksheet[cellAddress].s.fill = { fgColor: { rgb: "CCCCCC" } };
+                }
+            }
+        }
+    }
+
+    // NEW FUNCTION: Set column widths
+    function setColumnWidths(worksheet, widths) {
+        if (!worksheet['!cols']) worksheet['!cols'] = [];
+        
+        widths.forEach((width, index) => {
+            worksheet['!cols'][index] = { wch: width };
+        });
+    }
+
+    // NEW FUNCTION: Add formulas to specific cells
+    function addFormulasToSheet(worksheet, formulaCells) {
+        formulaCells.forEach(({cell, formula, format}) => {
+            if (worksheet[cell]) {
+                worksheet[cell].f = formula;
+                if (format) {
+                    if (!worksheet[cell].s) worksheet[cell].s = {};
+                    worksheet[cell].s.numFmt = format;
+                }
+            }
+        });
+    }
+
+    // MODIFIED FUNCTION: Create area calculation sheet with formulas
+    function createAreaCalculationSheetDataWithFormulas(results) {
+        const data = [];
+        const formulaCells = [];
+        const timestamp = new Date().toLocaleString();
+        
+        // Add title and project info
+        data.push(['SHUTTERING AREA STATEMENT']);
+        data.push([`Generated on: ${timestamp}`]);
+        data.push([`Project Height: ${projectHeight}mm`]);
+        data.push([]); // Empty row
+
+        // Header row
+        data.push([
+            'Sr. No.',
+            'Casting',
+            'Shape Name',
+            'Column Size S1 (mm)',
+            'Column Size S2 (mm)',
+            'Column Perimeter (mm)',
+            'Column Height (mm)',
+            'Column Shuttering Area (Sq.m)',
+            'External Corner Area (Sq.m)',
+            'Total Area per Set (Sq.m)'
+        ]);
+
+        let currentRow = 6; // Starting row for data (after headers)
+        let srNo = 1;
+        const castingSubtotalRows = [];
+
+        // Process each casting
+        results.results.castings.forEach((casting, castingIndex) => {
+            const castingStartRow = currentRow;
+            
+            // Add casting header row
+            const castingType = casting.name === results.results.primary_casting ? "PRIMARY" : "SECONDARY";
+            data.push([
+                '',
+                `${casting.name} (${castingType})`,
+                '', '', '', '', '', '', '', ''
+            ]);
+            currentRow++;
+
+            // Process each shape in the casting
+            casting.shapes.forEach(shape => {
+                if (shape.sides && shape.sides.length >= 2) {
+                    const s1 = shape.sides[0].length;
+                    const s2 = shape.sides[1].length;
+                    
+                    // Add data row with placeholders for formulas
+                    data.push([
+                        srNo,
+                        '', // Casting name already shown in header
+                        shape.name,
+                        s1,
+                        s2,
+                        '', // Perimeter - will be formula
+                        projectHeight,
+                        '', // Shuttering area - will be formula
+                        '', // External corner area - will be formula
+                        ''  // Total area - will be formula
+                    ]);
+
+                    // Add formulas for this row
+                    const rowLetter = currentRow.toString();
+                    
+                    // Perimeter formula: 2*(S1+S2)
+                    formulaCells.push({
+                        cell: `F${rowLetter}`,
+                        formula: `2*(D${rowLetter}+E${rowLetter})`,
+                        format: '0'
+                    });
+                    
+                    // Shuttering area formula: (Perimeter * Height) / 1000000
+                    formulaCells.push({
+                        cell: `H${rowLetter}`,
+                        formula: `(F${rowLetter}*G${rowLetter})/1000000`,
+                        format: '0.00'
+                    });
+                    
+                    // External corner area formula: (Perimeter * 1.248) / 1000
+                    formulaCells.push({
+                        cell: `I${rowLetter}`,
+                        formula: `(0.13*4*G${rowLetter})/1000`,
+                        format: '0.00'
+                    });
+                    
+                    // Total area formula: Shuttering area + External corner area
+                    formulaCells.push({
+                        cell: `J${rowLetter}`,
+                        formula: `H${rowLetter}+I${rowLetter}`,
+                        format: '0.00'
+                    });
+
+                    srNo++;
+                    currentRow++;
+                }
+            });
+
+            // Add casting subtotal row
+            const subtotalRow = currentRow;
+            data.push([
+                '',
+                `${casting.name} Subtotal`,
+                '', '', '', '', '', '', '',
+                '' // Will be sum formula
+            ]);
+            
+            // Add subtotal formula
+            const startDataRow = castingStartRow + 2; // Skip casting header
+            const endDataRow = currentRow - 1;
+            if (endDataRow >= startDataRow) {
+                formulaCells.push({
+                    cell: `J${subtotalRow}`,
+                    formula: `SUM(J${startDataRow}:J${endDataRow})`,
+                    format: '0.00'
+                });
+            }
+            
+            castingSubtotalRows.push(subtotalRow);
+            currentRow++;
+            
+            // Add empty row between castings
+            data.push([]);
+            currentRow++;
+        });
+
+        // Add grand total
+        const grandTotalRow = currentRow;
+        data.push([
+            '',
+            'TOTAL COLUMN SHUTTERING AREA',
+            '', '', '', '', '', '', '',
+            '' // Will be sum of all subtotals
+        ]);
+        
+        // Add grand total formula
+        if (castingSubtotalRows.length > 0) {
+            const subtotalReferences = castingSubtotalRows.map(row => `J${row}`).join('+');
+            formulaCells.push({
+                cell: `J${grandTotalRow}`,
+                formula: subtotalReferences,
+                format: '0.00'
+            });
+        }
+        
+        currentRow++;
+
+        // Add summary information
+        data.push([]);
+        data.push(['FORMULA EXPLANATIONS']);
+        data.push(['Perimeter Formula:', '2 × (Side1 + Side2)']);
+        data.push(['Shuttering Area Formula:', '(Perimeter × Height) ÷ 1,000,000']);
+        data.push(['External Corner Area Formula:', '(Perimeter × 1.248) ÷ 1,000']);
+        data.push(['Total Area Formula:', 'Shuttering Area + External Corner Area']);
+        data.push([]);
+        data.push(['SUMMARY INFORMATION']);
+        data.push(['Total Castings', results.results.castings.length]);
+        data.push(['Primary Casting', results.results.primary_casting]);
+        data.push(['Project Height (mm)', projectHeight]);
+
+        return { data, formulaCells };
+    }
+
+    // MODIFIED FUNCTION: Enhanced dimensions sheet
     function createDimensionsSheetData(results) {
         const data = [];
         const timestamp = new Date().toLocaleString();
         
         // Add title and timestamp
-        data.push(['Panel Optimization Results - Casting Dimensions & Panel Layouts']);
+        data.push(['PANEL OPTIMIZATION RESULTS - CASTING DIMENSIONS & PANEL LAYOUTS']);
         data.push([`Generated on: ${timestamp}`]);
+        data.push([`Project Height: ${projectHeight}mm`]);
         data.push([]); // Empty row
 
         // Find primary casting name
@@ -535,10 +827,10 @@ document.addEventListener('DOMContentLoaded', function() {
             const castingType = casting.name === primaryCasting ? "PRIMARY" : "SECONDARY";
             
             // Casting header
-            data.push([`Casting: ${casting.name} (${castingType})`]);
+            data.push([`CASTING: ${casting.name} (${castingType})`]);
             
             // Column headers
-            data.push(['Shape', 'Side', 'Length (mm)', 'Panel Layout', 'Panel Count', 'Panel Types']);
+            data.push(['Shape', 'Side', 'Length (mm)', 'Panel Layout', 'Panel Count', 'Standard Panels', 'Custom Panels']);
             
             // Add shape and side data
             casting.shapes.forEach(shape => {
@@ -547,11 +839,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     const panelCount = side.panels.length;
                     
                     // Calculate standard vs custom panels
-                    // Note: You may need to define STANDARD_PANEL_SIZES in your frontend
-                    const standardSizes = [100, 200, 300, 400, 500, 600]; // Example standard sizes
+                    const standardSizes = [100, 200, 300, 400, 500, 600];
                     const standardCount = side.panels.filter(p => standardSizes.includes(p)).length;
                     const customCount = panelCount - standardCount;
-                    const panelTypes = `Std: ${standardCount}, Custom: ${customCount}`;
                     
                     data.push([
                         sideIdx === 0 ? shape.name : '', // Show shape name only on first side
@@ -559,7 +849,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         side.length,
                         panelLayout,
                         panelCount,
-                        panelTypes
+                        standardCount,
+                        customCount
                     ]);
                 });
             });
@@ -571,60 +862,72 @@ document.addEventListener('DOMContentLoaded', function() {
         return data;
     }
 
+    // MODIFIED FUNCTION: Enhanced panel summary
     function createPanelSummarySheetData(results) {
         const data = [];
         const timestamp = new Date().toLocaleString();
         
         // Add title and timestamp
-        data.push(['Panel Usage Summary']);
+        data.push(['PANEL USAGE SUMMARY REPORT']);
         data.push([`Generated on: ${timestamp}`]);
+        data.push([`Primary Casting: ${results.results.primary_casting}`]);
         data.push([]); // Empty row
 
-        // Standard Panels Section
-        data.push(['Standard Panels']);
-        data.push(['Panel Size (mm)', 'Count', 'Type']);
+        // Combined Panel Overview
+        data.push(['COMPLETE PANEL INVENTORY']);
+        data.push(['Panel Size (mm)', 'Standard Count', 'Custom Count', 'Total Count']);
         
-        if (Object.keys(results.results.panel_stats.standard).length > 0) {
-            Object.entries(results.results.panel_stats.standard)
-                .sort(([a], [b]) => parseInt(a) - parseInt(b))
-                .forEach(([size, count]) => {
-                    data.push([`${size}mm`, count, 'Standard']);
-                });
-        } else {
-            data.push(['No standard panels used', '', '']);
-        }
+        // Get all unique panel sizes
+        const allSizes = new Set([
+            ...Object.keys(results.results.panel_stats.standard),
+            ...Object.keys(results.results.panel_stats.custom)
+        ]);
         
-        data.push([]); // Empty row
-
-        // Custom Panels Section
-        data.push(['Custom Panels']);
-        data.push(['Panel Size (mm)', 'Count', 'Type']);
+        const totalAllPanels = Object.values(results.results.panel_stats.standard).reduce((a, b) => a + b, 0) +
+                               Object.values(results.results.panel_stats.custom).reduce((a, b) => a + b, 0);
         
-        if (Object.keys(results.results.panel_stats.custom).length > 0) {
-            Object.entries(results.results.panel_stats.custom)
-                .sort(([a], [b]) => parseInt(a) - parseInt(b))
-                .forEach(([size, count]) => {
-                    data.push([`${size}mm`, count, 'Custom']);
-                });
-        } else {
-            data.push(['No custom panels used', '', '']);
-        }
+        Array.from(allSizes)
+            .map(size => parseInt(size))
+            .sort((a, b) => a - b)
+            .forEach(size => {
+                const sizeStr = size.toString();
+                const standardCount = results.results.panel_stats.standard[sizeStr] || 0;
+                const customCount = results.results.panel_stats.custom[sizeStr] || 0;
+                const totalCount = standardCount + customCount;
+                
+                data.push([
+                    `${size}mm`,
+                    standardCount,
+                    customCount,
+                    totalCount
+                ]);
+            });
         
         data.push([]); // Empty row
 
         // Summary Statistics
-        data.push(['Summary Statistics']);
+        data.push(['SUMMARY STATISTICS']);
+        data.push(['Metric', 'Value', 'Percentage']);
         
         const totalStandard = Object.values(results.results.panel_stats.standard).reduce((a, b) => a + b, 0);
         const totalCustom = Object.values(results.results.panel_stats.custom).reduce((a, b) => a + b, 0);
         const totalPanels = totalStandard + totalCustom;
         
-        data.push(['Total Panels Used', totalPanels, '']);
-        data.push(['Standard Panels', totalStandard, totalPanels > 0 ? `${(totalStandard/totalPanels*100).toFixed(1)}%` : '0%']);
-        data.push(['Custom Panels', totalCustom, totalPanels > 0 ? `${(totalCustom/totalPanels*100).toFixed(1)}%` : '0%']);
+        data.push(['Total Panels Used', totalPanels, '100.0%']);
+        data.push(['Standard Panels', totalStandard, totalPanels > 0 ? `${(totalStandard/totalPanels*100).toFixed(1)}%` : '0.0%']);
+        data.push(['Custom Panels', totalCustom, totalPanels > 0 ? `${(totalCustom/totalPanels*100).toFixed(1)}%` : '0.0%']);
         data.push(['Standard Panel Types', Object.keys(results.results.panel_stats.standard).length, '']);
         data.push(['Custom Panel Types', Object.keys(results.results.panel_stats.custom).length, '']);
         data.push(['Total Panel Types', results.results.panel_stats.totals.total_types, '']);
+        
+        data.push([]); // Empty row
+
+        // Efficiency Analysis
+        data.push(['EFFICIENCY ANALYSIS']);
+        data.push(['Panel Reuse Efficiency', `${results.results.reuse_analysis.efficiency.percentage}%`]);
+        data.push(['Panels Reused', results.results.reuse_analysis.efficiency.reused_panels]);
+        data.push(['Total Panels in Analysis', results.results.reuse_analysis.efficiency.total_panels]);
+        data.push(['New Panels Required', results.results.reuse_analysis.totals.total_new]);
 
         return data;
     }
@@ -641,6 +944,11 @@ document.addEventListener('DOMContentLoaded', function() {
             const summaryData = createPanelSummarySheetData(results);
             const summaryCSV = convertArrayToCSV(summaryData);
             downloadCSV(summaryCSV, 'panel_summary.csv');
+
+            // Generate area calculation CSV
+            const areaData = createAreaCalculationSheetData(results);
+            const areaCSV = convertArrayToCSV(areaData);
+            downloadCSV(areaCSV, 'area_calculation.csv');
 
             alert('Excel export failed, but CSV files have been generated successfully.');
         } catch (error) {

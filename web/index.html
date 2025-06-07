@@ -13,6 +13,23 @@
       <main>
         <div class="card">
           <h2>Input Data</h2>
+
+          <!-- NEW: Project Configuration Section -->
+          <div class="config-section">
+            <h3>Project Configuration :</h3>
+            <div class="form-group">
+              <label for="project-height">Project Height (mm):</label>
+              <input
+                type="number"
+                id="project-height"
+                placeholder="2400"
+                value="2400"
+                min="50"
+                step="50"
+              />
+            </div>
+          </div>
+
           <div class="input-toggle">
             <label>
               <input type="radio" name="input-method" value="manual" checked />
